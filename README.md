@@ -297,7 +297,7 @@ The Flask application uses this endpoint to connect to MySQL.
 
 
 
-# Step 11: Create the EC2 Launch Template
+# Step 8: Create the EC2 Launch Template
 
 A Launch Template was created to define how the application EC2 instances should be launched.
 
@@ -327,7 +327,7 @@ Auto Scaling Group
 
 ---
 
-# Step 12: Configure EC2 User Data
+# Step 9: Configure EC2 User Data
 
 The EC2 instances are automatically configured using a User Data script.
 
@@ -380,7 +380,7 @@ Start Application
 
 ---
 
-# Step 13: Create the Auto Scaling Group
+# Step 10: Create the Auto Scaling Group
 
 An Auto Scaling Group was created to maintain the desired number of application instances.
 
@@ -410,7 +410,7 @@ This means the application does not depend on a single EC2 instance.
 
 ---
 
-# Step 14: Verify the EC2 Instances
+# Step 11: Verify the EC2 Instances
 
 The Auto Scaling Group successfully launched two EC2 instances.
 
@@ -433,7 +433,7 @@ The final Auto Scaling Group status was:
 
 ---
 
-# Step 15: Create the Target Group
+# Step 12: Create the Target Group
 
 A Target Group was created for the EC2 application instances.
 
@@ -469,7 +469,7 @@ The `/health` endpoint verifies that the Flask application is running and can su
 
 
 
-# Step 17: Create the Application Load Balancer
+# Step 13: Create the Application Load Balancer
 
 An Application Load Balancer was created to provide a single endpoint for users.
 
@@ -518,7 +518,7 @@ project4-web-alb-55605889.us-east-1.elb.amazonaws.com
 
 ---
 
-# Step 19: Access the Team Status Dashboard
+# Step 14: Access the Team Status Dashboard
 
 The application was accessed using the Application Load Balancer DNS name.
 
@@ -564,7 +564,7 @@ This confirmed that:
 
 ---
 
-# Step 20: Test the Application
+# Step 15: Test the Application
 
 The application was tested by creating a status update.
 
