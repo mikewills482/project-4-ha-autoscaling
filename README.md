@@ -1,790 +1,966 @@
-# AWS Project 4 – Highly Available Team Status Dashboard
+# Project 4 — Highly Available Web App with Auto Scaling.
+
+A highly available team status dashboard deployed on AWS using Amazon VPC, EC2, Auto Scaling, Application Load Balancer, Amazon RDS for MySQL, Nginx, Gunicorn, and Flask.
+
+The purpose of this project is to demonstrate how to build and deploy a secure, scalable, and highly available web application using AWS infrastructure.
+
+---
 
 ## Project Overview
 
-This project demonstrates how to build and deploy a highly available web application on AWS using Amazon VPC, Amazon EC2, EC2 Auto Scaling, Application Load Balancer, Amazon RDS MySQL, private subnets, NAT Gateway, Security Groups, and Availability Zones.
+TeamPulse is a centralized project status dashboard that allows teams to:
 
-The application is a Team Status Dashboard built with Python and Flask.
+- Publish project updates
+- Track project health
+- Identify blocked projects
+- Identify projects at risk
+- Track completed work
+- View updates from multiple teams
+- Determine which EC2 instance served a request
 
-Users access the application through an Application Load Balancer. The load balancer distributes traffic between two EC2 instances running in separate Availability Zones. The Flask application connects to an Amazon RDS MySQL database to store team status updates.
-
-The final architecture provides application-level high availability because the web application is running on two EC2 instances across two Availability Zones.
+The application is deployed across multiple Availability Zones using an Application Load Balancer and EC2 Auto Scaling Group.
 
 ---
 
-## Architecture
+# Architecture
 
 ```text
-                         INTERNET
-                             |
-                             v
-                  +----------------------+
-                  | Application Load     |
-                  |      Balancer        |
-                  |       HTTP :80       |
-                  +----------+-----------+
-                             |
-                   +---------+---------+
-                   |                   |
-                   v                   v
-            +-------------+     +-------------+
-            |    EC2 #1   |     |    EC2 #2   |
-            | us-east-1a  |     | us-east-1b  |
-            |   Private   |     |   Private   |
-            |   Subnet    |     |   Subnet    |
-            +------+------+     +------+------+
-                   |                   |
-                   +---------+---------+
-                             |
-                             v
-                    +----------------+
-                    |   Amazon RDS   |
-                    |     MySQL      |
-                    |     :3306      |
-                    +----------------+
+                              INTERNET
+                                  │
+                                  │ HTTP :80
+                                  ▼
+                    ┌─────────────────────────┐
+                    │  Application Load       │
+                    │  Balancer               │
+                    │  Public Subnets         │
+                    └────────────┬────────────┘
+                                 │
+                                 │ HTTP :80
+                                 ▼
+                    ┌─────────────────────────┐
+                    │      Target Group       │
+                    │       /health           │
+                    └────────────┬────────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    │                         │
+                    ▼                         ▼
+             ┌─────────────┐           ┌─────────────┐
+             │   EC2 #1    │           │   EC2 #2    │
+             │   AZ-A      │           │   AZ-B      │
+             │   Private   │           │   Private   │
+             │   Subnet    │           │   Subnet    │
+             └──────┬──────┘           └──────┬──────┘
+                    │                         │
+                    └────────────┬────────────┘
+                                 │
+                                 │ TCP :3306
+                                 ▼
+                       ┌────────────────────┐
+                       │     Amazon RDS     │
+                       │       MySQL        │
+                       │   Private Subnets  │
+                       └────────────────────┘
+
+
+Private EC2 instances
+        │
+        │ Outbound traffic
+        ▼
+   NAT Gateway
+        │
+        ▼
+ Internet Gateway
+        │
+        ▼
+     Internet
 ```
 
 ---
 
-## AWS Services Used
+# AWS Services Used
 
-- Amazon VPC
-- Amazon EC2
-- EC2 Auto Scaling
-- Application Load Balancer
-- Target Group
-- Amazon RDS MySQL
-- NAT Gateway
-- Internet Gateway
-- Security Groups
-- Availability Zones
-- Python
-- Flask
-- PyMySQL
-
----
-
-## Prerequisites
-
-Before starting, ensure you have:
-
-- An AWS Account
-- Access to the AWS Management Console
-- Basic knowledge of AWS
-- Basic Python knowledge
-
-The AWS Region used for this project was:
-
-```text
-us-east-1
-```
-
-The application instances were deployed across:
-
-```text
-us-east-1a
-us-east-1b
-```
+| AWS Service | Purpose |
+|---|---|
+| Amazon VPC | Provides isolated networking |
+| Public Subnets | Hosts the Application Load Balancer |
+| Private Subnets | Hosts EC2 application servers and RDS |
+| Internet Gateway | Provides internet connectivity to public resources |
+| NAT Gateway | Provides outbound internet access to private resources |
+| Security Groups | Controls network access |
+| Amazon EC2 | Runs the Flask application |
+| EC2 Launch Template | Defines the EC2 configuration |
+| Auto Scaling Group | Maintains multiple EC2 instances |
+| Application Load Balancer | Distributes incoming traffic |
+| Target Group | Registers and health-checks EC2 instances |
+| Amazon RDS MySQL | Stores application data |
+| Nginx | Acts as the web server/reverse proxy |
+| Gunicorn | Runs the Flask application |
+| Flask | Provides the application backend |
 
 ---
 
-# Step 1: Create the VPC
+# 1.  Create the VPC
 
-The first step was to create a dedicated VPC for the project.
+I created the VPC using the **VPC and more** option.
 
-The VPC provides the networking environment for the Application Load Balancer, EC2 instances, NAT Gateway, and RDS database.
+### VPC Configuration
 
-The project VPC was configured with multiple subnets across two Availability Zones.
+| Setting | Value |
+|---|---|
+| VPC Name | Project4 |
+| IPv4 CIDR | `10.0.0.0/16` |
+| Availability Zones | 2 |
+| Public Subnets | 2 |
+| Private Subnets | 2 |
+| NAT Gateway | Regional |
+| VPC Endpoints | None |
 
-The architecture separates public resources from private application resources.
-
-![VPC](screenshots/IMG_053045.png)
-![VPC](screenshots/IMG_054711.png)
-
----
-
-# Step 2: Create the Subnets
-
-Two private subnets were created for the EC2 application instances.
-
-The private subnets were:
+The VPC contains two Availability Zones:
 
 ```text
-subnet-05ddb8e67b065a8e2
-project4-vpc-subnet-private1-us-east-1a
+Project4 VPC
+CIDR: 10.0.0.0/16
+
+Availability Zone A
+├── Public Subnet
+└── Private Subnet
+
+Availability Zone B
+├── Public Subnet
+└── Private Subnet
 ```
 
-and:
+### Why two Availability Zones?
 
-```text
-subnet-0e112ca49ed006215
-project4-vpc-subnet-private2-us-east-1b
-```
+Two Availability Zones provide redundancy.
 
-The instances were intentionally placed in different Availability Zones.
+If one Availability Zone becomes unavailable, the application can continue operating from the second Availability Zone.
 
-This provides redundancy if one Availability Zone experiences a problem.
 
-![Private Subnets](screenshots/IMG_060520.png)
+![VPC Creation](screenshots/IMG_151928.png)
+![VPC Creation](screenshots/IMG_151941.png)
 
----
 
-# Step 3: Configure the Internet Gateway
 
-An Internet Gateway was attached to the VPC.
+# 2.  Internet Gateway
+
+An Internet Gateway was automatically created and attached to the VPC.
 
 The Internet Gateway provides internet connectivity for resources located in public subnets.
 
-The Application Load Balancer uses the public side of the architecture to receive requests from users.
-
-The basic traffic flow is:
+The Application Load Balancer is deployed into the public subnets and receives internet traffic through the Internet Gateway.
 
 ```text
 Internet
-   |
-   v
+   │
+   ▼
 Internet Gateway
-   |
-   v
-Public Subnet
-   |
-   v
+   │
+   ▼
+Public Subnets
+   │
+   ▼
 Application Load Balancer
 ```
 
-![Internet Gateway](screenshots/IMG_062635.png)
+![Internet Gateway](screenshots/IMG_152850.png)
 
 ---
 
-# Step 4: Configure Route Tables
+# 3.  NAT Gateway
 
-Route tables were configured to control traffic between the public and private subnets.
+A **Regional NAT Gateway** was created for the VPC.
 
-The public route table provides a route to the Internet Gateway.
+The NAT Gateway allows EC2 instances in private subnets to initiate outbound internet connections without making the EC2 instances publicly accessible.
 
-The private route table sends internet-bound traffic through the NAT Gateway.
+This is useful because the EC2 User Data script needs to download and install application dependencies.
 
-Example private route:
+Examples include:
 
-```text
-0.0.0.0/0 -> NAT Gateway
-```
+- Python packages
+- Flask
+- PyMySQL
+- Gunicorn
+- Nginx
+- System updates
 
-This allows private EC2 instances to access the internet for tasks such as installing operating system updates and Python packages without exposing the instances directly to the internet.
-
-![Route Tables](screenshots/IMG_130144.png)
-![Route Tables](screenshots/IMG_130252.png)
-![Route Tables](screenshots/IMG_130411.png)
-![Route Tables](screenshots/IMG_130411.png)
-![Route Tables](screenshots/IMG_130529.png)
-
----
-
-# Step 5: Create the NAT Gateway
-
-A NAT Gateway was created to provide outbound internet access to the EC2 instances located in private subnets.
-
-The traffic flow is:
+Traffic flows like this:
 
 ```text
 Private EC2
-     |
-     v
-Private Route Table
-     |
-     v
+     │
+     ▼
 NAT Gateway
-     |
-     v
+     │
+     ▼
 Internet Gateway
-     |
-     v
+     │
+     ▼
 Internet
 ```
 
-The EC2 instances can therefore download packages and updates while remaining in private subnets.
+The EC2 instances remain in private subnets and do not require public IP addresses.
 
-![NAT Gateway](screenshots/IMG_130837.png)
+![Nat Gateway](screenshots/IMG_152915.png)
 
 ---
 
-# Step 6: Configure Security Groups
+# 4. Security Groups
 
-Security Groups were created to control communication between the AWS resources.
+Three security groups were created.
 
-The EC2 instances use a security group that allows application traffic from the Application Load Balancer.
+---
 
-The RDS database uses a separate security group.
+## 4.1 Application Load Balancer Security Group
 
-The database communication uses:
+### Name
 
 ```text
-MySQL
-TCP
-Port 3306
+Project4-ALB-SG
 ```
 
-The general communication flow is:
+### Inbound Rule
+
+| Type | Protocol | Port | Source |
+|---|---|---:|---|
+| HTTP | TCP | 80 | `0.0.0.0/0` |
+
+This allows users on the internet to access the Application Load Balancer.
 
 ```text
 Internet
-   |
-   v
-Application Load Balancer
-   |
-   v
-EC2 Instances
-   |
-   v
-RDS MySQL
-``` 
-
-The RDS security group allows MySQL traffic from the appropriate application security group rather than exposing port 3306 directly to the internet.
-
-![Security Groups](screenshots/IMG_063334.png)
-![Security Groups](screenshots/IMG_064428.png)
-![Security Groups](screenshots/IMG_064757.png)
----
-
-# Step 7: Create the Amazon RDS MySQL Database
-
-Amazon RDS was used as the managed database for the application.
-
-The database configuration was:
-
-```text
-Engine:
-MySQL
-
-Initial Database Name:
-statusdashboard
-
-Username:
-admin
-
-Port:
-3306
-
-DB Parameter Group:
-default.mysql8.4
-
-Option Group:
-default:mysql-8-4
-
-Encryption:
-Enabled
+    │
+    │ HTTP :80
+    ▼
+ALB
 ```
 
-The RDS instance became:
 
-```text
-Available
-```
+![ALB Security Group](screenshots/IMG_160443.png)
 
-The database endpoint is:
-
-```text
-project4-mysql.c87uscy8my2i.us-east-1.rds.amazonaws.com
-```
-
-The Flask application uses this endpoint to connect to MySQL.
-
-![RDS Database](screenshots/IMG_071829.png)
-![RDS Database](screenshots/IMG_071905.png)
-![RDS Database](screenshots/IMG_073941.png)
-
----
-
-
-
-# Step 8: Create the EC2 Launch Template
-
-A Launch Template was created to define how the application EC2 instances should be launched.
-
-The Launch Template was named:
-
-```text
-project4-web-launch-template
-```
-
-The Launch Template contains the EC2 configuration and User Data required to automatically install and start the Flask application.
-
-The Launch Template is then used by the Auto Scaling Group.
-
-```text
-Launch Template
-       |
-       v
-Auto Scaling Group
-       |
-       +-------- EC2 Instance 1
-       |
-       +-------- EC2 Instance 2
-```
-
-![Launch Template](screenshots/IMG_082445.png)
-![Launch Template](screenshots/IMG_082555.png)
-
----
-
-# Step 9: Configure EC2 User Data
-
-The EC2 instances are automatically configured using a User Data script.
-
-The script is stored in the repository as:
-
-```text
-scripts/userdata.sh
-```
-
-The User Data script performs tasks including:
-
-- Updating the operating system
-- Installing Python
-- Installing pip
-- Installing Git
-- Creating the application directory
-- Installing Flask
-- Installing PyMySQL
-- Installing cryptography
-- Configuring the RDS database connection
-- Creating the systemd service
-- Starting the Flask application
-- Enabling the application to restart automatically
-
-The bootstrap process is:
-
-```text
-EC2 Starts
-    |
-    v
-User Data Executes
-    |
-    v
-Install Python
-    |
-    v
-Install Dependencies
-    |
-    v
-Configure Database
-    |
-    v
-Create Flask Service
-    |
-    v
-Start Application
-```
-
-![Launch Template](screenshots/IMG_082555.png)
-
----
-
-# Step 10: Create the Auto Scaling Group
-
-An Auto Scaling Group was created to maintain the desired number of application instances.
-
-The Auto Scaling Group was named:
-
-```text
-project4-web-asg
-```
-
-The desired capacity was:
-
-```text
-2
-```
-
-The two instances were distributed across:
-
-```text
-us-east-1a
-us-east-1b
-```
-
-This means the application does not depend on a single EC2 instance.
-
-![Auto Scaling Group](screenshots/IMG_082934.png)
-![Auto Scaling Group](screenshots/IMG_083712.png)
-
----
-
-# Step 11: Verify the EC2 Instances
-
-The Auto Scaling Group successfully launched two EC2 instances.
-
-The instances were running in:
-
-```text
-us-east-1a
-us-east-1b
-```
-
-Both instances were healthy.
-
-The final Auto Scaling Group status was:
-
-```text
-2/2 Healthy
-```
-
-![EC2 Instances](screenshots/IMG_090921.png)
-
----
-
-# Step 12: Create the Target Group
-
-A Target Group was created for the EC2 application instances.
-
-The Target Group sends traffic from the Application Load Balancer to the EC2 instances.
-
-The application uses:
-
-```text
-Protocol:
-HTTP
-
-Port:
-80
-```
-
-The health check configuration uses:
-
-```text
-Health Check Protocol:
-HTTP
-
-Health Check Path:
-/health
-```
-
-The `/health` endpoint verifies that the Flask application is running and can successfully communicate with the database.
-
-![Target Group](screenshots/IMG_091830.png)
-![Target Group](screenshots/IMG_091841.png)
-![Target Group](screenshots/IMG_091854.png)
-
----
-
-
-
-# Step 13: Create the Application Load Balancer
-
-An Application Load Balancer was created to provide a single endpoint for users.
-
-The ALB was configured to listen on:
-
-```text
-HTTP
-Port 80
-```
-
-The ALB forwards requests to the Target Group containing the EC2 instances.
-
-The architecture is:
-
-```text
-User
- |
- v
-Application Load Balancer
- |
- +-------------------+
- |                   |
- v                   v
-EC2 #1              EC2 #2
-us-east-1a          us-east-1b
-```
-
-The Application Load Balancer became:
-
-```text
-Active
-```
-
-The DNS name was:
-
-```text
-project4-web-alb-55605889.us-east-1.elb.amazonaws.com
-```
-
-![Application Load Balancer](screenshots/IMG_093614.png)
-![Application Load Balancer](screenshots/IMG_093631.png)
-![Application Load Balancer](screenshots/IMG_093647.png)
-![Application Load Balancer](screenshots/IMG_093708.png)
-
+![ALB Security Group](screenshots/IMG_160500.png)
 
 
 ---
 
-# Step 14: Access the Team Status Dashboard
+# 4.2 EC2 Security Group
 
-The application was accessed using the Application Load Balancer DNS name.
-
-The dashboard displayed:
+### Name
 
 ```text
-Team Status Dashboard
-
-Served by: ip-10-0-131-202.ec2.internal
-
-1
-On Track
-
-0
-At Risk
-
-0
-Blocked
-
-1
-Teams
+Project4-EC2-SG
 ```
 
-The application successfully displayed a stored database record:
+### Inbound Rule
+
+| Type | Protocol | Port | Source |
+|---|---|---:|---|
+| HTTP | TCP | 80 | `Project4-ALB-SG` |
+
+The EC2 instances do not accept HTTP traffic directly from the internet.
+
+Only the Application Load Balancer can send HTTP traffic to the EC2 instances.
 
 ```text
-Team A / AWS Project 4 — on_track
-
-Project 4 deployment is working successfully.
-
-by MJ & Michael
+Internet
+    │
+    ▼
+ALB
+    │
+    │ HTTP :80
+    ▼
+EC2
 ```
 
-This confirmed that:
+This provides an additional layer of network security.
 
-- The ALB was working
-- The EC2 instances were working
-- The Flask application was working
-- The application could connect to RDS
-- Data was successfully stored and retrieved from MySQL
-
-![Team Status Dashboard](screenshots/IMG_095554.png)
+![EC2 Security Group](screenshots/IMG_162158.png)
 
 ---
 
-# Step 15: Test the Application
+# 4.3 RDS Security Group
 
-The application was tested by creating a status update.
-
-Example:
+### Name
 
 ```text
-Team Name:
-Team A
-
-Project:
-AWS Project 4
-
-Status:
-On Track
-
-Message:
-Project 4 deployment is working successfully.
-
-Author:
-MJ & Michael
+Project4-RDS-SG
 ```
 
-After submitting the update, the information appeared on the dashboard.
+### Inbound Rule
 
-This confirmed that the application could write data to RDS and retrieve it successfully.
+| Type | Protocol | Port | Source |
+|---|---|---:|---|
+| MySQL/Aurora | TCP | 3306 | `Project4-EC2-SG` |
 
-![Status Update](screenshots/IMG_095554.png)
+This means that only EC2 instances belonging to the EC2 security group can connect to the MySQL database.
 
-
----
-
-# Final Architecture
-
-The completed project architecture is:
-
-```text
-                              USERS
-                                |
-                                v
-                     +--------------------+
-                     | Application Load   |
-                     |      Balancer      |
-                     |      HTTP :80      |
-                     +---------+----------+
-                               |
-                    +----------+----------+
-                    |                     |
-                    v                     v
-             +-------------+       +-------------+
-             |    EC2 #1   |       |    EC2 #2   |
-             | us-east-1a  |       | us-east-1b  |
-             |   PRIVATE   |       |   PRIVATE   |
-             +------+------+       +------+------+
-                    |                     |
-                    +----------+----------+
-                               |
-                               v
-                      +----------------+
-                      |   Amazon RDS   |
-                      |     MySQL      |
-                      |     :3306      |
-                      +----------------+
-```
-
-The private EC2 instances use the NAT Gateway for outbound internet access:
+The database is not exposed to the public internet.
 
 ```text
 EC2
- |
- v
-Private Route Table
- |
- v
-NAT Gateway
- |
- v
-Internet Gateway
- |
- v
-Internet
+ │
+ │ TCP :3306
+ ▼
+RDS MySQL
 ```
+
+![RDS Security Group](screenshots/IMG_162036.png)
 
 ---
 
-# Project Structure
+# 5. Create the RDS DB Subnet Group
 
-The final GitHub repository is organized as follows:
+A DB subnet group was created:
 
 ```text
-project-4-ha-autoscaling/
-│
-├── application/
-│   ├── app.py
-│   └── requirements.txt
-│
-├── scripts/
-│   └── userdata.sh
-│
-├── screenshots/
-|
-│
-├── .gitignore
-└── README.md
+Project4-DB-Subnet-Group
 ```
 
----
-
-# .gitignore
-
-The `.gitignore` file is used to prevent sensitive information and unnecessary files from being committed to GitHub.
-
-
+The DB subnet group uses both private subnets:
 
 ```text
-.env
-.env.*
-*.pem
-*.key
-__pycache__/
-*.pyc
-.venv/
-venv/
-.vscode/
-.DS_Store
+Private Subnet
+us-east-1a
+
+Private Subnet
+us-east-1b
 ```
 
+This ensures that the database infrastructure is associated with private networking across the Availability Zones.
 
 
----
-
-
-# What I Learned
-
-Through this project, I learned how to:
-
-- Create an AWS VPC
-- Configure public and private subnets
-- Configure route tables
-- Configure an Internet Gateway
-- Configure a NAT Gateway
-- Configure Security Groups
-- Deploy Amazon RDS MySQL
-- Create an EC2 Launch Template
-- Use EC2 User Data
-- Create an Auto Scaling Group
-- Deploy EC2 instances across multiple Availability Zones
-- Create an Application Load Balancer
-- Configure a Target Group
-- Configure health checks
-- Deploy a Python Flask application
-- Connect Flask to Amazon RDS MySQL
-- Store and retrieve application data
-- Verify application health
-- Demonstrate high availability
-- Document an AWS project using GitHub
+![DB Subnet Group](screenshots/IMG_163050.png)
 
 ---
 
-# Conclusion
+# 6. Create the Amazon RDS MySQL Database
 
-This project demonstrates how multiple AWS services can be combined to create a highly available web application.
+I created an Amazon RDS MySQL database.
 
-The Application Load Balancer provides a single entry point for users and distributes traffic across healthy EC2 instances.
+### Database Configuration
 
-The Auto Scaling Group maintains multiple application instances across different Availability Zones.
+| Setting | Value |
+|---|---|
+| Engine | MySQL |
+| Creation Method | Full Configuration |
+| Template | Free Tier |
+| Deployment | Single-AZ |
+| VPC | Project4 VPC |
+| DB Subnet Group | Project4-DB-Subnet-Group |
+| Security Group | Project4-RDS-SG |
 
-Amazon RDS provides a managed MySQL database for persistent application data.
+The RDS database is placed inside the private network and is accessible only by the EC2 application servers.
 
-Private subnets provide an additional layer of network isolation for the application servers, while the NAT Gateway provides outbound internet connectivity when required.
-
-The final result is a working Team Status Dashboard with:
+### Database Name
 
 ```text
-2 EC2 Instances
-2 Availability Zones
-1 Application Load Balancer
-1 Auto Scaling Group
-1 RDS MySQL Database
-1 Flask Application
+statusdashboard
 ```
 
-The final deployment reached:
+### Database User
 
 ```text
-2/2 Healthy
+admin
 ```
 
-and successfully served the Team Status Dashboard through the Application Load Balancer.
+The password should be stored securely and should not be committed to GitHub.
+
+
+![RDS Configuration](screenshots/IMG_163757.png)
+
+
 
 ---
 
-# Cleanup
+# 7. Create the EC2 Launch Template
 
-AWS resources can generate charges while they are running.
+An EC2 Launch Template was created:
 
-After completing the project, review and delete resources that are no longer required.
+```text
+Project4-Web-Launch-Template
+```
 
-Depending on the deployment, review:
+### Configuration
 
-- Auto Scaling Group
-- EC2 instances
-- Application Load Balancer
-- Target Group
-- Launch Template
-- NAT Gateway
-- Elastic IP
-- RDS database
-- Security Groups
-- Route Tables
-- Internet Gateway
-- VPC
+| Setting | Value |
+|---|---|
+| Operating System | Amazon Linux 2023 |
+| Instance Type | `t3.micro` |
+| VPC | Project4 VPC |
+| Security Group | Project4-EC2-SG |
+| User Data | Flask deployment script |
 
-Resources should be deleted carefully because some AWS resources depend on other resources.
+Amazon Linux 2023 was selected as the operating system.
+
+The User Data script automatically installs and configures the application when an EC2 instance launches.
+
+
+![Launch Template](screenshots/IMG_171930.png)
+![Launch Template](screenshots/IMG_171947.png)
+
 
 ---
 
-# Author
+# 8. EC2 User Data
 
-MJ & Michael
+The EC2 User Data script automates the application deployment.
 
-GitHub:
+The script performs the following operations:
 
-https://github.com/mikewills482
+```text
+1. Update Amazon Linux
+2. Install Python
+3. Install pip
+4. Install Nginx
+5. Create application directory
+6. Create Flask application
+7. Create Python virtual environment
+8. Install Flask
+9. Install PyMySQL
+10. Install Gunicorn
+11. Configure RDS connection
+12. Create systemd service
+13. Configure Nginx
+14. Start Gunicorn
+15. Start Nginx
+16. Enable services on boot
+```
+
+The application stack is:
+
+```text
+Nginx
+   │
+   ▼
+Gunicorn
+   │
+   ▼
+Flask
+   │
+   ▼
+PyMySQL
+   │
+   ▼
+Amazon RDS MySQL
+```
+
+![User Data](screenshots/IMG_172209.png)
+
+---
+
+# 9. Create the Auto Scaling Group
+
+An Auto Scaling Group was created using:
+
+```text
+Project4-Web-Launch-Template
+```
+
+The Auto Scaling Group uses the Project4 VPC.
+
+Both private subnets were selected:
+
+```text
+Private Subnet AZ-A
+Private Subnet AZ-B
+```
+
+### Capacity Configuration
+
+| Setting | Value |
+|---|---:|
+| Minimum | 2 |
+| Desired | 2 |
+| Maximum | 2 |
+
+This ensures that two EC2 instances are running.
+
+```text
+             Auto Scaling Group
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+          ▼                     ▼
+       EC2 #1                EC2 #2
+       AZ-A                  AZ-B
+```
+
+![Auto Scaling Group](screenshots/IMG_172745.png)
+![Auto Scaling Group](screenshots/IMG_173024.png)
+![Auto Scaling Group](screenshots/IMG_173255.png)
+
+---
+
+# 10. Create the Target Group
+
+A Target Group was created for the EC2 instances.
+
+### Configuration
+
+```text
+Target Type:
+Instances
+```
+
+The Target Group uses the same Project4 VPC.
+
+### Health Check
+
+```text
+Protocol: HTTP
+Path: /health
+Port: Traffic Port
+```
+
+The `/health` endpoint is provided by the Flask application.
+
+A healthy response looks like:
+
+```json
+{
+    "status": "healthy",
+    "instance": "ip-10-0-x-x"
+}
+```
+
+The Application Load Balancer uses this endpoint to determine whether an EC2 instance is healthy.
+
+
+![Target Group](screenshots/IMG_174443.png)
+![Target Group](screenshots/IMG_174514.png)
+![Target Group](screenshots/IMG_174826.png)
+
+
+---
+
+# 11. Create the Application Load Balancer
+
+An Application Load Balancer was created.
+
+### Configuration
+
+| Setting | Value |
+|---|---|
+| Name | Project4-ALB |
+| Scheme | Internet-facing |
+| IP Address Type | IPv4 |
+| VPC | Project4 VPC |
+| Subnets | Public AZ-A + Public AZ-B |
+| Security Group | Project4-ALB-SG |
+| Listener | HTTP :80 |
+| Target Group | Project4 Target Group |
+
+The ALB is placed in the public subnets while the EC2 instances remain in the private subnets.
+
+This is an important part of the architecture.
+
+```text
+                  INTERNET
+                     │
+                     ▼
+             ┌───────────────┐
+             │      ALB      │
+             │ Public Subnet │
+             └───────┬───────┘
+                     │
+                     ▼
+              Private EC2
+                     │
+                     ▼
+                Private RDS
+```
+
+
+![Load Balancer](screenshots/IMG_175420.png)
+![Load Balancer](screenshots/IMG_175438.png)
+![Load Balancer](screenshots/IMG_175454.png)
+![Load Balancer](screenshots/IMG_175513.png)
+
+---
+
+# 12. Health Check Architecture
+
+The Application Load Balancer sends requests to:
+
+```text
+GET /health
+```
+
+The request travels through:
+
+```text
+ALB
+ │
+ ▼
+Target Group
+ │
+ ▼
+EC2
+ │
+ ▼
+Nginx
+ │
+ ▼
+Gunicorn
+ │
+ ▼
+Flask
+ │
+ ▼
+RDS
+```
+
+If Flask successfully connects to RDS:
+
+```text
+HTTP 200
+```
+
+The target is:
+
+```text
+HEALTHY
+```
+
+If the application cannot connect to RDS:
+
+```text
+HTTP 500
+```
+
+The target becomes:
+
+```text
+UNHEALTHY
+```
+
+---
+
+# 13.  Highly Available Web App with Auto Scaling
+
+The application uses a modern dark interface with:
+
+- Gradient purple and blue colors
+- Glass-style cards
+- Responsive layout
+- Project statistics
+- Status badges
+- Team avatars
+- Project updates
+- Mobile-friendly design
+- Update submission form
+- EC2 instance identification
+
+The dashboard displays:
+
+```text
+ON TRACK
+AT RISK
+BLOCKED
+COMPLETED
+TEAMS
+```
+
+The dashboard also displays which EC2 instance served the request.
+
+This makes it possible to demonstrate that traffic is being distributed between multiple EC2 instances.
+
+![Dashboard](screenshots/IMG_065307.png)
+
+---
+
+# 14. Post a Team Update
+
+Users can publish updates using:
+
+```text
+/update
+```
+
+The form allows users to enter:
+
+- Team name
+- Project name
+- Project status
+- Update message
+- Author name
+
+Available statuses:
+
+```text
+On Track
+At Risk
+Blocked
+Completed
+```
+
+
+![Update Form](screenshots/IMG_065704.png)
+
+
+---
+
+
+# 15. Security Architecture
+
+The project uses layered network security.
+
+## Internet → ALB
+
+The ALB accepts:
+
+```text
+HTTP :80
+Source: Internet
+```
+
+## ALB → EC2
+
+The EC2 instances accept:
+
+```text
+HTTP :80
+Source: Project4-ALB-SG
+```
+
+## EC2 → RDS
+
+RDS accepts:
+
+```text
+MySQL :3306
+Source: Project4-EC2-SG
+```
+
+Therefore:
+
+```text
+             INTERNET
+                 │
+                 │ :80
+                 ▼
+          ┌─────────────┐
+          │     ALB     │
+          └──────┬──────┘
+                 │
+                 │ :80
+                 ▼
+          ┌─────────────┐
+          │     EC2     │
+          │   PRIVATE   │
+          └──────┬──────┘
+                 │
+                 │ :3306
+                 ▼
+          ┌─────────────┐
+          │     RDS     │
+          │   PRIVATE   │
+          └─────────────┘
+```
+
+The RDS database is not directly accessible from the public internet.
+
+---
+
+# 16. Final Validation Checklist
+
+## VPC
+
+- [x] Project4 VPC created
+- [x] CIDR `10.0.0.0/16`
+- [x] Two Availability Zones
+- [x] Two public subnets
+- [x] Two private subnets
+- [x] Internet Gateway attached
+- [x] NAT Gateway created
+
+## Security Groups
+
+- [x] ALB security group created
+- [x] ALB allows HTTP port 80
+- [x] EC2 security group created
+- [x] EC2 allows port 80 only from ALB security group
+- [x] RDS security group created
+- [x] RDS allows port 3306 only from EC2 security group
+
+## RDS
+
+- [x] MySQL database created
+- [x] DB subnet group created
+- [x] Private subnets selected
+- [x] RDS security group attached
+- [x] Database available
+
+## EC2
+
+- [x] Amazon Linux 2023 selected
+- [x] t3.micro selected
+- [x] Launch Template created
+- [x] User Data configured
+- [x] Flask installed
+- [x] Gunicorn installed
+- [x] Nginx installed
+
+## Auto Scaling
+
+- [x] Auto Scaling Group created
+- [x] Minimum = 2
+- [x] Desired = 2
+- [x] Maximum = 2
+- [x] Private subnets selected
+- [x] Instances distributed across Availability Zones
+
+## Load Balancer
+
+- [x] Internet-facing ALB created
+- [x] IPv4 selected
+- [x] Public subnets selected
+- [x] ALB security group attached
+- [x] HTTP port 80 listener configured
+- [x] Target Group attached
+
+## Health Checks
+
+- [x] `/health` endpoint created
+- [x] Target Group health check configured
+- [x] EC2 instances registered
+- [x] Targets healthy
+
+---
+
+# 17. Final Architecture Summary
+
+The completed architecture follows this model:
+
+```text
+                         USER
+                           │
+                           │ HTTP
+                           ▼
+                  ┌─────────────────┐
+                  │      ALB        │
+                  │  PUBLIC SUBNETS │
+                  └────────┬────────┘
+                           │
+                           ▼
+                 ┌──────────────────┐
+                 │   TARGET GROUP    │
+                 │     /health      │
+                 └────────┬─────────┘
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+             ▼                         ▼
+      ┌─────────────┐           ┌─────────────┐
+      │    EC2 #1   │           │    EC2 #2   │
+      │     AZ-A    │           │     AZ-B    │
+      │   PRIVATE   │           │   PRIVATE   │
+      └──────┬──────┘           └──────┬──────┘
+             │                         │
+             └────────────┬────────────┘
+                          │
+                          │ MySQL :3306
+                          ▼
+                  ┌───────────────┐
+                  │      RDS      │
+                  │     MySQL     │
+                  │    PRIVATE    │
+                  └───────────────┘
+```
+
+---
+
+# 18.  Project Outcome
+
+This project demonstrates the deployment of a secure and highly available web application using AWS.
+
+The final solution provides:
+
+- ✅ Multi-AZ architecture
+- ✅ Private EC2 instances
+- ✅ Private RDS database
+- ✅ Internet-facing Application Load Balancer
+- ✅ Auto Scaling
+- ✅ Health checks
+- ✅ Security-group-based network isolation
+- ✅ NAT Gateway for private subnet outbound access
+- ✅ Automated EC2 provisioning
+- ✅ Flask application
+- ✅ Gunicorn application server
+- ✅ Nginx reverse proxy
+- ✅ MySQL persistence
+- ✅ Responsive dashboard
+- ✅ Team project status tracking
+
+The architecture separates the **presentation, application, and database layers**, providing a strong foundation for scalability, availability, and security.
+
+---
+
+# Technology Stack
+
+```text
+Cloud
+└── AWS
+
+Networking
+├── Amazon VPC
+├── Public Subnets
+├── Private Subnets
+├── Internet Gateway
+└── NAT Gateway
+
+Compute
+├── Amazon EC2
+├── Launch Template
+└── Auto Scaling Group
+
+Load Balancing
+├── Application Load Balancer
+└── Target Group
+
+Application
+├── Python
+├── Flask
+├── Gunicorn
+└── Nginx
+
+Database
+└── Amazon RDS MySQL
+
+Security
+└── AWS Security Groups
+```
+
+---
+# 19. AWS Resource Cleanup
+
+To avoid unexpected AWS charges after completing the project, delete resources that are no longer needed.
+
+Pay special attention to:
+
+NAT Gateway 
+
+RDS MySQL 
+
+Application Load Balancer
+
+EC2 instances 
+
+Auto Scaling Group
+
+After cleanup, check the AWS Billing Dashboard to confirm there are no unwanted active resources or charges.
+
+---
+# 20. LICENSE
+
+This project is licensed under the **MIT License**.
+
+
+
+---
+
+# 21. GitHub Repository
+
+[View the project on GitHub](https://github.com/mikewills482/project-4-ha-autoscaling/tree/main)
+
